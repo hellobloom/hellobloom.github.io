@@ -1,0 +1,295 @@
+<html>
+  <head>
+
+
+   <link rel="stylesheet" href="https://use.typekit.net/dak8vzd.css" />
+<style type="text/css">
+* {
+  font-family: 'sofia-pro', sans-serif;
+}
+pre{
+  font-family: 'Courier New', monospace;
+  margin-left:20px;
+  padding:0.5em;
+  background-color:#f0f0f0;
+}
+@media print{
+  p img{
+    max-width:1000px;
+    margin:0 auto;
+  }
+}
+</style>
+  </head>
+  <body>
+
+<h1 id="bloommerkletree">Bloom Merkle Tree</h1>
+
+<p>The data hash emitted in an attestation event is the root hash of a Merkle tree with a strictly defined structure. </p>
+
+<p><img src="BloomMerkleTreeHighLevel-ca5dc717-a83b-4950-a549-b3a5d3b91b5f.png" alt="" /></p>
+
+<p>The tree consists of three different types of leaves: data nodes, padding nodes and a checksum node. All nodes are sorted alphabetically by the hex string representation of the hash before constructing the tree.</p>
+
+<p>The root of the tree is signed by the attester. The signature is hashed with a nonce. The resulting hash is emitted in the attestation event. The existence of the 2nd layer hash allows a user to share a Merkle proof of their verified data without revealing their BloomId. They do this by concealing the 2nd layer nonce which is hashed with the attester sig.</p>
+
+<p><strong>Code Snippets</strong></p>
+
+<p><a href="https://github.com/hellobloom/attestations-lib/blob/master/src/HashingLogic.ts">https://github.com/hellobloom/attestations-lib/blob/master/src/HashingLogic.ts</a></p>
+
+<p><strong>Proving Ownership</strong></p>
+
+<p>Normally a recipient of this proof would challenge the sender to prove ownership of the data. They would do this by requesting the sender to sign a message using a private key associated with the BloomID referenced in the on chain attestation. By choosing not to reveal the 2nd layer nonce the sender can not prove they are the owner of the data using their BloomID.</p>
+
+<p>Instead they can include a signed message using an auxiliary key pair which is not associated with their BloomID on chain. This signature is embedded in the data node. A recipient of the data can challenge the sender to sign a message using the auxiliary key to prove they are the subject of the attestation</p>
+
+<p>Secondary identification info (traditional authentication methods like name/email/tel/SSN) can less optimally also be used.</p>
+
+<p><strong>Data Node</strong></p>
+
+<p>The data node contains the data and type information for an attestation. Each data node is structured as a Merkle tree with 4 leaves. </p>
+
+<ol>
+<li>Plaintext attestation data</li>
+
+<li>Plaintext type data
+
+
+<ul>
+<li>These are separate leaves so a user may choose to reveal just the type of some verified data without revealing the data itself</li></ul>
+</li>
+
+<li>Revocation link
+
+
+<ul>
+<li>When an attester wishes to revoke an attestation they submit a revocation event to the Attestation Logic contract containing either the globalLink of nodeLink contained in an attestation. A recipient should query the attestation logic events to check if either link is revoked while validating an attestation shared by a subject. The revocation node is <strong>always</strong> shared so the recipient knows if the attestation is valid.</li>
+
+<li>The revocation node also contains the hashed data and hashed types. This is so a malicious subject can't submit an alternate data or type node in the position of the secondary subject sig node without the attester's knowledge.</li></ul>
+</li>
+
+<li>Hashed secondary subject sig
+
+
+<ul>
+<li>A subject may choose to embed a hashed signature in the data tree. This signature should contain the dataHash and typeHash from the other leaves within this tree. If the subject wishes to prove ownership of the attested data without revealing their BloomID they can sign a challenge using the same keypair they used for the embedded signature.</li>
+
+<li>A nonce is contained in the signature so a recipient or attester does not learn the secondary public key unless desired by the sender</li></ul>
+</li>
+</ol>
+
+<p>The attester signs the root hash of each data node so a user may prove this data node was verified without having to reveal the entire tree.</p>
+
+<p><img src="BloomMerkleTree-datanode-2387723d-2c04-498e-9e93-0a6e08bc4c2c.png" alt="" /></p>
+
+<pre><code>export interface IAttestationNode extends IAttestation {
+    data: IAttestationData
+  type: IAttestationType
+  /**
+   * aux either contains a hash of IAuxSig or just a padding node hash
+   */
+  aux: string
+  link: IRevocationLinks
+}
+
+/**
+ *
+ * @param attestation Given the contents of an attestation node, return a
+ * Merkle tree
+ */
+export const getDataTree = (attestation: IAttestationNode): MerkleTree =&gt; {
+  const dataHash = hashMessage(orderedStringify(attestation.data))
+  const typeHash = hashMessage(orderedStringify(attestation.type))
+  const linkHash = hashMessage(orderedStringify(attestation.link))
+  const auxHash = hashMessage(attestation.aux)
+  return getMerkleTreeFromLeaves([dataHash, typeHash, linkHash, auxHash])
+}
+</code></pre>
+
+<p><strong>Padding Node</strong></p>
+
+<p>Each non-terminal node on the tree must have no missing children. This is so no information can be gathered about the number of revealed or hidden data nodes in the tree unless explicitly shared by the user.</p>
+
+<p>The amount of padding nodes is defined as the number of terminal nodes at the given tree depth - the number of data nodes - 1. The depth of the tree starts at 5 and increases by 5 when all the terminal nodes are filled.</p>
+
+<p>Therefore, when the number of data nodes is 15 or fewer, the height of the tree is 5. If there are greater than 15 data nodes, the height of the tree grows to 10 which allows for 511 terminal nodes containing data plus the checksum node.</p>
+
+<p><img src="BloomMerkleTreePaddingnode-3b0dabb9-b0e8-4e9d-a160-b1972724db6a.png" alt="" /></p>
+
+<pre><code>/**
+ * Given the number of data nodes return an array of padding nodes
+ * @param {number} dataCount - number of data nodes in tree
+ *
+ * A Bloom Merkle tree will contain at minimum one data node and one checksum node
+ * In order to obscure the amount of data in the tree, the number of nodes are padded to
+ * a set threshold
+ *
+ * The Depth of the tree increments in steps of 5
+ * The number of terminal nodes in a filled binary tree is 2 ^ (n - 1) where n is the depth
+ *
+ * dataCount 1 -&gt; 15: paddingCount: 14 -&gt; 0 (remeber + 1 for checksum node)
+ * dataCount 16 -&gt; 511: paddingCount 495 -&gt; 0
+ * dataCount 512 -&gt; ...: paddingCount 15871 -&gt; ...
+ * ...
+ */
+export const getPadding = (dataCount: number): string[] =&gt; {
+  if (dataCount &lt; 1) return []
+  let i = 5
+  while (dataCount + 1 &gt; 2 ** (i - 1)) {
+    i += 5
+  }
+  const paddingCount = 2 ** (i - 1) - (dataCount + 1)
+  return Array.apply(null, Array(paddingCount)).map(
+    (item: number, index: number) =&gt; {
+      return hashMessage(crypto.randomBytes(20))
+    }
+  )
+}
+</code></pre>
+
+<p><strong>Checksum node</strong></p>
+
+<p>The padding nodes obfuscate the number of filled nodes. If a user wants to prove they have revealed all the data contained in an attestation they can reveal the checksum node. The checksum node contains a hash of the array of all the data node hashes.</p>
+
+<p>The checksum node is optional so the user has deniability about what data they did not reveal, if they don't want to reveal all data in an attestation tree.</p>
+
+<p><img src="BloomMerkleTreeChecksum-95a6d561-b722-43b2-9f4a-52684068f934.png" alt="" /></p>
+
+<pre><code>/**
+ * Given an array of root hashes, sort and hash them into a checksum buffer
+ * @param {string[]} dataHashes - array of dataHashes as hex strings
+ */
+export const getChecksum = (dataHashes: string[]): Buffer =&gt; {
+  return ethUtil.toBuffer(hashMessage(JSON.stringify(dataHashes.sort())))
+}
+
+/**
+ * Given an array of root hashes, get and sign the checksum
+ * @param dataHashes - array of dataHashes as hex strings
+ * @param privKey - private key of signer
+ */
+export const signChecksum = (dataHashes: string[], privKey: Buffer): string =&gt; {
+  return signHash(getChecksum(dataHashes), privKey)
+}
+</code></pre>
+
+<h2 id="proofs">Proofs</h2>
+
+<p>The following diagrams show what nodes of the Merkle tree must be revealed to allow a recipient to prove the revealed data was in the attestation.</p>
+
+<p><strong>Revealing a single node of data including a reference to an on chain attestation</strong></p>
+
+<p>The user must reveal the following in this proof:</p>
+
+<ul>
+<li>Plaintext attestation data and the nonce used to hash the data leaf</li>
+
+<li>Plaintext type data and the nonce used to hash the type leaf</li>
+
+<li>Revocation links for recipient to check against revocation events</li>
+
+<li>The attester's signature of the data node</li>
+
+<li>The hashes of sibling nodes in the merkle tree needed to reproduce the tree's root hash</li>
+
+<li>The tree's root hash</li>
+
+<li>The attester's signature of the tree's root hash</li>
+
+<li>The nonce used to hash the attester's root hash sig</li>
+</ul>
+
+<p><img src="BloomMerkleTree-2singlenodeonchain-3dcce660-4328-4b47-8cd5-0816513d4d34.png" alt="" /></p>
+
+<p><strong>Revealing a single node of data without revealing association with a BloomID</strong></p>
+
+<ul>
+<li>Plaintext attestation data and the nonce used to hash the data leaf</li>
+
+<li>Plaintext type data and the nonce used to hash the type leaf</li>
+
+<li>The attester's signature of the data node</li>
+
+<li>Revocation links</li>
+
+<li>Data and type hash signed by secondary private key</li>
+</ul>
+
+<p><img src="BloomMerkleTree-2singlenodeanon-2-477e3dcd-3f60-40ae-84a1-5b8ea7806490.png" alt="" /></p>
+
+<p><strong>Revealing all data and proving all data was shared</strong></p>
+
+<ul>
+<li>Plaintext attestation data and the nonce used to hash the data leave</li>
+
+<li>Plaintext type data and the nonce used to hash the type leaves</li>
+
+<li>The attester's signature of each data node</li>
+
+<li>The hashes of neighboring (sibling or parent) nodes in the merkle tree needed to reproduce the tree's root hash</li>
+
+<li>The tree's root hash</li>
+
+<li>The attester's signature of the tree's root hash</li>
+
+<li>The nonce used to hash the attester's root hash sig</li>
+
+<li>Revocation links</li>
+</ul>
+
+<p><img src="BloomMerkleTree-2fullreveal-07765478-61cf-45da-8b4e-dc51b25e78c1.png" alt="" /></p>
+
+<p><strong>Revealing a single type including a reference to an on chain attestation</strong></p>
+
+<p>The user must reveal the following in this proof:</p>
+
+<ul>
+<li>Plaintext type data and the nonce used to hash the type leaf</li>
+
+<li>The attester's signature of the data node</li>
+
+<li>The hashes of neighboring (sibling or parent) nodes in the merkle tree needed to reproduce the tree's root hash</li>
+
+<li>The tree's root hash</li>
+
+<li>The attester's signature of the tree's root hash</li>
+
+<li>The nonce used to hash the attester's root hash sig</li>
+
+<li>Revocation links</li>
+</ul>
+
+<p><img src="BloomMerkleTree-2typeonchain-7517f1e3-3713-42a3-8263-7bb89af3e547.png" alt="" /></p>
+
+<p><strong>Revealing a single type without revealing association with a BloomID</strong></p>
+
+<ul>
+<li>Plaintext attestation data and the nonce used to hash the data leaf</li>
+
+<li>Plaintext type data and the nonce used to hash the type leaf</li>
+
+<li>The attester's signature of the data node</li>
+</ul>
+
+<p><img src="BloomMerkleTree-2typeanon-10cd9e5a-746d-4142-8646-b7962acda51c.png" alt="" /></p>
+
+<p><strong>Revealing all data and proving all data was shared without revealing association with a BloomID</strong></p>
+
+<ul>
+<li>Plaintext attestation data and the nonce used to hash the data leaves</li>
+
+<li>Plaintext type data and the nonce used to hash the type leaves</li>
+
+<li>The attester's signature of each data node</li>
+
+<li>The hashes of neighboring (sibling or parent) nodes in the merkle tree needed to reproduce the tree's root hash</li>
+
+<li>The tree's root hash</li>
+
+<li>The attester's signature of the tree's root hash</li>
+</ul>
+
+<p><img src="BloomMerkleTree-2fullrevealanon-45a7cb4e-4436-4ede-83d2-452d92266182.png" alt="" /></p>
+</body>
+</html>
+
