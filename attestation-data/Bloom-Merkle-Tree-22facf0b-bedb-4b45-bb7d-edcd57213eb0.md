@@ -32,7 +32,7 @@ type ResponseData = {
   /**
    * Optional proof showing the original subject has authorized the sender address to claim control and share the data.
    */
-  authorization: IAuthorization[] 
+  signedAuthorization: ISignedAuthorization[] 
 }
 ```
 
@@ -51,7 +51,7 @@ There are multiple options for a holder to prove control of a credential to a ve
 Authorization is one way. A signed authorization object only indicates that the signer authorizes the new keypair to share data on their behalf. Not the other way around.
 
 ```
-export interface IAuthorization {
+interface IAuthorization {
   /**
    * Address of keypair granting authorization
    */
@@ -65,10 +65,27 @@ export interface IAuthorization {
    */
   revocation: string
 }
+
+interface ISignedAuthorization {
+  /**
+   * Hash of IAuthorization
+   */
+  authorization: IAuthorization
+  /**
+   * Signed hashed authorization
+   */
+  signature: string
+}
 ```
 
+## Signing
+To complete an authorization the subject signs the IAuthorization object with their private key. Before signing the object is sorted alphabetically by key, then stringified and hashed using the keccak256 hashing function.
+
+## Revocation
+Revocation of authorization works the same way as attestation revocation. The revocation token embedded in the `IAuthorization` object should be emitted by an event in the `Attestation Logic` smart contract by either the subject or the recipient.
+
 ## Chaining
-Authorizations can be chained together so each keypair does not have to authorize each new keypair. When checking authorization, a verifier should check each chain for revocation in the Attestation Logic smart contract.
+Authorizations can be chained together so each keypair does not have to authorize each new keypair. When checking authorization, a verifier should check each chain for revocation in the Attestation Logic smart contract. Chained authorizations are provided as an array of signed `ISignedAuthorization` objects ordered to show a relationship from the sender address back to the original subject address.
 
 
 # Terms of Use
