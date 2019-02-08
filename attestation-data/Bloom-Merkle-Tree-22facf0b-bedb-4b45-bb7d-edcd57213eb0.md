@@ -1,4 +1,80 @@
-# Bloom Merkle Tree
+# Data Presentation
+Users can share their data with a 3rd party verifier via Bloom's Share-Kit and Receive-Kit. These open source kits make it easy for developers to embed data request & validation services into their application architecture. The specification for the data presentation payload is defined in this section.
+
+```
+type ResponseData = {
+  /**
+   * The Ethereum address of the user sharing their data
+   */
+  subject: string
+
+  /**
+   * Data shared to the receiving endpoint requested by the share-kit QR code.
+   * This data can be verified by the receiver via functions in utils.ts.
+   */
+  data: IVerifiedData[]
+
+  /**
+   * Hex string representation of the `data` & `token` being keccak256 hashed
+   */
+  packedData: string
+
+  /**
+   * Signature of `packedData` by the user with their mnemonic.
+   */
+  signature: string
+
+  /**
+   * Token that should match the one provided to the share-kit QR code.
+   */
+  token: string
+
+  /**
+   * Optional proof showing the original subject has authorized the sender address to claim control and share the data.
+   */
+  authorization: IAuthorization[] 
+}
+```
+
+The above `ResponseData` presentation payload contains all the data requested by the verfier in addition to the metadata needed to verify the integrity of the data. A verifier will perform the following checks:
+
+1. Validate the format of the received data
+2. Verify the data integrity by checking signatures and performing the Merkle Proof
+3. Verify the on chain data integrity by comparing the entity addresses and data hashes with attestations emitted in Bloom's smart contracts
+
+## Extensibility
+The data presentation payload should allow different proofs and ownership schemas to be used in order to be interoperable with other identity and verifiable claims standards. This may be achieved by adopting a JSON-LD payload standard with `@context` fields linking to machine readable schema definitions. For now the payload is strictly defined as the above `ResponseData` type.
+
+# Authorization
+There are multiple options for a holder to prove control of a credential to a verifier. The simplest option is to sign the presentation payload along with a challenge using the same private key as the address in the on chain attestation. The original subject may also sign an authorization to allow a different private key to share their behalf. This authorization is structured similar a data node in a Selective Disclosure Merkle Tree. This data structure allows verifiers to check the integrity of the authorization as well as check for revocation of the authorization.
+
+Authorization is one way. A signed authorization object only indicates that the signer authorizes the new keypair to share data on their behalf. Not the other way around.
+
+```
+export interface IAuthorization {
+  /**
+   * Address of keypair granting authorization
+   */
+  subject: string
+  /**
+   * Address of keypair receiving authorization
+   */
+  recipient: string
+  /**
+   * Hex string to identify this authorization in the event of revocation
+   */
+  revocation: string
+}
+```
+
+## Chaining
+Authorizations can be chained together so each keypair does not have to authorize each new keypair. When checking authorization, a verifier should check each chain for revocation in the Attestation Logic smart contract.
+
+
+# Terms of Use
+A node in the Selective Disclosure Merkle Tree which contains terms of use a verifier is recommended to follow. The terms of use may indicate that the data is only authorized to be shared by the original subject. Or may limit chained authorizaions. The terms of use may also specify a retention period of the data by the verifier.
+
+# Selective Disclosure Merkle Tree
 
 The data hash emitted in an attestation event is the root hash of a Merkle tree with a strictly defined structure. 
 
@@ -6,7 +82,7 @@ The data hash emitted in an attestation event is the root hash of a Merkle tree 
 
 The tree consists of three different types of leaves: data nodes, padding nodes and a checksum node. All nodes are sorted alphabetically by the hex string representation of the hash before constructing the tree.
 
-The root of the tree is signed by the attester. The signature is hashed with a nonce. The resulting hash is emitted in the attestation event. The existence of the 2nd layer hash allows a user to share a Merkle proof of their verified data without revealing their BloomId. They do this by concealing the 2nd layer nonce which is hashed with the attester sig.
+The root of the tree is signed by the attester. The signature is hashed with a nonce. The resulting hash is emitted in the attestation event. The existence of the 2nd layer hash allows a user to share a signed Merkle proof of their verified data without correlating their private information with a public transaction.
 
 **Code Snippets**
 
@@ -14,15 +90,15 @@ The root of the tree is signed by the attester. The signature is hashed with a n
 
 **Proving Ownership**
 
-Normally a recipient of this proof would challenge the sender to prove ownership of the data. They would do this by requesting the sender to sign a message using a private key associated with the BloomID referenced in the on chain attestation. By choosing not to reveal the 2nd layer nonce the sender can not prove they are the owner of the data using their BloomID.
+Normally a recipient of this proof challenges the sender to prove ownership of the data. They do this by requesting the sender to sign a message using a private key associated with the address referenced in the attestation.
 
-Instead they can include a signed message using an auxiliary key pair which is not associated with their BloomID on chain. This signature is embedded in the data node. A recipient of the data can challenge the sender to sign a message using the auxiliary key to prove they are the subject of the attestation
+Users can also sign the payload with a keypair associated with the address referenced in the attestation. They must provide a proof showing the key pair of the attested address signed permission to allow the other keypair prove ownership.
 
 Secondary identification info (traditional authentication methods like name/email/tel/SSN) can less optimally also be used.
 
-**Data Node**
+**Claim Node**
 
-The data node contains the data and type information for an attestation. Each data node is structured as a Merkle tree with 4 leaves. 
+The claim node contains the data and type information for an attestation. Each data node is structured as a Merkle tree with 4 leaves. 
 
 1. Plaintext attestation data
 2. Plaintext type data
