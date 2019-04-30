@@ -9,32 +9,32 @@ Users can share their data with a 3rd party verifier via Bloom's Share-Kit and R
        * The Ethereum address of the user sharing their data
        */
       subject: string
-    
+
       /**
        * Data shared to the receiving endpoint requested by the share-kit QR code.
        * This data can be verified by the receiver via functions in utils.ts.
        */
       data: IVerifiedData[]
-    
+
       /**
        * Hex string representation of the `data` & `token` being keccak256 hashed
        */
       packedData: string
-    
+
       /**
        * Signature of `packedData` by the user with their mnemonic.
        */
       signature: string
-    
+
       /**
        * Token that should match the one provided to the share-kit QR code.
        */
       token: string
-    
+
       /**
        * Optional proof showing the original subject has authorized the sender address to claim control and share the data.
        */
-      signedAuthorization: ISignedAuthorization[] 
+      signedAuthorization: ISignedAuthorization[]
     }
 
 The above `ResponseData` presentation payload contains all the data requested by the verifier in addition to the metadata needed to verify the integrity of the data. A verifier will perform the following checks:
@@ -67,7 +67,7 @@ Authorization works in one direction. A signed authorization object only indicat
        */
       revocation: string
     }
-    
+
     interface ISignedAuthorization {
       /**
        * Hash of IAuthorization
@@ -93,7 +93,7 @@ Authorizations can be chained together so each keypair does not have to authoriz
 
 ## Terms of Use
 
-*not yet implemented*
+_not yet implemented_
 
 A node in the Selective Disclosure Merkle Tree which contains terms of use a verifier is recommended to follow. The terms of use may indicate that the data is only authorized to be shared by the original subject. Or may limit chained authorizations. The terms of use may also specify a retention period of the data by the verifier.
 
@@ -124,6 +124,12 @@ Layer 2 hashes are sorted alphabetically, combined into a batch Merkle Tree then
 
 ![](Selective_Disclosure_Merkle_Tree_V2-7-f02bd79d-7f11-4be8-9939-0ffc96c45b38.png)
 
+### Combined Data Structure
+
+The below diagram shows in detail how the data structures interoperate.
+
+![](Combined_Merkle_Tree.png)
+
 **Code Snippets**
 
 [https://github.com/hellobloom/attestations-lib/blob/master/src/HashingLogic.ts](https://github.com/hellobloom/attestations-lib/blob/master/src/HashingLogic.ts)
@@ -140,45 +146,131 @@ The claim node contains the data and type information for an attestation. Each c
 
 1. Plaintext attestation data
 2. Plaintext type data
-    - These are separate leaves so a user may choose to reveal just the type of some verified data without revealing the data itself
+   - These are separate leaves so a user may choose to reveal just the type of some verified data without revealing the data itself
 3. Issuance node
-    - Revocation data
-        - When an attester wishes to revoke an attestation they submit a revocation event to the Attestation Logic contract containing either the globalLink of nodeLink contained in an attestation. A recipient should query the attestation logic events to check if either link is revoked while validating an attestation shared by a subject. The revocation node is **always** shared so the recipient knows if the attestation is valid.
-        - The revocation node also contains the hashed data and hashed types. This is so a malicious subject can't submit an alternate data or type node in the position of the secondary subject sig node without the attester's knowledge.
-    - Issuance/ expiration dates
-        - The attester can also include issuance and expiration dates in the issuance node in order to specify the time period a claim should be considered valid
+   - Revocation data
+     - When an attester wishes to revoke an attestation they submit a revocation event to the Attestation Logic contract containing either the globalLink of nodeLink contained in an attestation. A recipient should query the attestation logic events to check if either link is revoked while validating an attestation shared by a subject. The revocation node is **always** shared so the recipient knows if the attestation is valid.
+     - The revocation node also contains the hashed data and hashed types. This is so a malicious subject can't submit an alternate data or type node in the position of the secondary subject sig node without the attester's knowledge.
+   - Issuance/ expiration dates
+     - The attester can also include issuance and expiration dates in the issuance node in order to specify the time period a claim should be considered valid
 4. Hashed auxiliary subject sig
-    - A subject may choose to embed a hashed signature in the data tree. This signature should contain the dataHash and typeHash from the other leaves within this tree. If the subject wishes to prove ownership of the attested data without revealing their BloomID they can sign a challenge using the same keypair they used for the embedded signature.
-    - A nonce is contained in the signature so a recipient or attester does not learn the secondary public key unless desired by the sender
+   - A subject may choose to embed a hashed signature in the data tree. This signature should contain the dataHash and typeHash from the other leaves within this tree. If the subject wishes to prove ownership of the attested data without revealing their BloomID they can sign a challenge using the same keypair they used for the embedded signature.
+   - A nonce is contained in the signature so a recipient or attester does not learn the secondary public key unless desired by the sender
 
 The attester signs the root hash of each claim node so a user may prove this claim node was verified without having to reveal the entire tree.
 
 ![](Merkle_Tree_Nodes-04f0c5dc-d834-42b6-9e29-a2cfd2abf816.png)
 
-    // needs updating
-    export interface IAttestationNode extends IAttestation {
-    	data: IAttestationData
-      type: IAttestationType
-      /**
-       * aux either contains a hash of IAuxSig or just a padding node hash
-       */
-      aux: string
-      issuance: IRevocationLinks
-      version: string
-    }
-    
-    /**
-     *
-     * @param attestation Given the contents of an attestation node, return a
-     * Merkle tree
-     */
-    export const getDataTree = (attestation: IAttestationNode): MerkleTree => {
-      const dataHash = hashMessage(orderedStringify(attestation.data))
-      const typeHash = hashMessage(orderedStringify(attestation.type))
-      const linkHash = hashMessage(orderedStringify(attestation.link))
-      const auxHash = hashMessage(attestation.aux)
-      return getMerkleTreeFromLeaves([dataHash, typeHash, linkHash, auxHash])
-    }
+```ts
+/**
+ * Latest supported types for constructing and interpreting Bloom Merkle Tree
+ */
+export interface IAttestationData {
+  // tslint:disable:max-line-length
+  /**
+   * String representation of the attestations data.
+   *
+   * ### Examples ###
+   * email: "test@bloom.co"
+   * sanction-screen: {\"firstName\":\"FIRSTNAME\",\"middleName\":\"MIDDLENAME\",\"lastName\":\"LASTNAME\",\"birthMonth\":1,\"birthDay\":1,\"birthYear\":1900,\"id\":\"a1a1a1a...\"}
+   *
+   * Any attestation that isn't a single string value will be
+   * a JSON string representing the attestation data.
+   */
+  // tslint:enable:max-line-length
+  data: string
+  /**
+   * Attestation data nonce
+   */
+  nonce: string
+  /**
+   * Semantic version used to keep track of attestation versions
+   */
+  version: string
+}
+
+export interface IAttestationType {
+  /**
+   * The type of attestation (phone, email, etc.)
+   */
+  type: keyof typeof AttestationTypeID
+  /**
+   * Optionally identifies service used to perform attestation
+   */
+  provider?: string
+  /**
+   * Attestation type nonce
+   */
+  nonce: string
+}
+
+export interface IIssuanceNode {
+  /**
+   * Hex string to identify this attestation node in the event of partial revocation
+   */
+  localRevocationToken: string
+  /**
+   * Hex string to identify this attestation in the event of revocation
+   */
+  globalRevocationToken: string
+  /**
+   * hash of data node attester is verifying
+   */
+  dataHash: string
+  /**
+   * hash of type node attester is verifying
+   */
+  typeHash: string
+  /**
+   * RFC3339 timestamp of when the claim was issued
+   * https://tools.ietf.org/html/rfc3339
+   */
+  issuanceDate: string
+  /**
+   * RFC3339 timestamp of when the claim should expire
+   * https://tools.ietf.org/html/rfc3339
+   */
+  expirationDate: string
+}
+
+export interface IAuxSig {
+  /**
+   * Hex string containing subject's auxiliary signature
+   * Signs the ordered stringified object containing
+   * { dataHash: hashAttestation(IAttestationData), typeHash: hashAttestation(IAttestationType)}
+   */
+  signedHash: string
+  /**
+   * Nonce to conceal unwanted revealing of aux public key
+   */
+  nonce: string
+}
+
+export interface IClaimNode {
+  data: IAttestationData
+  type: IAttestationType
+  /**
+   * aux either contains a hash of IAuxSig or just a padding node hash
+   */
+  aux: string
+}
+
+export interface IIssuedClaimNode extends IClaimNode {
+  issuance: IIssuanceNode
+}
+/**
+ *
+ * @param attestation Given the contents of an attestation node, return a
+ * Merkle tree
+ */
+export const getClaimTree = (claim: IIssuedClaimNode): MerkleTree => {
+  const dataHash = hashMessage(orderedStringify(claim.data))
+  const typeHash = hashMessage(orderedStringify(claim.type))
+  const issuanceHash = hashMessage(orderedStringify(claim.issuance))
+  const auxHash = hashMessage(claim.aux)
+  return getMerkleTreeFromLeaves([dataHash, typeHash, issuanceHash, auxHash])
+}
+```
 
 **Padding Node**
 
@@ -235,7 +327,7 @@ The checksum node is optional so the user has deniability about what data they d
     export const getChecksum = (dataHashes: string[]): Buffer => {
       return ethUtil.toBuffer(hashMessage(JSON.stringify(dataHashes.sort())))
     }
-    
+
     /**
      * Given an array of root hashes, get and sign the checksum
      * @param dataHashes - array of dataHashes as hex strings
@@ -251,7 +343,7 @@ The following diagrams show what nodes of the Merkle tree must be revealed to al
 
 **Revealing a single node of data including a reference to an on chain attestation**
 
- The user must reveal the following in this proof:
+The user must reveal the following in this proof:
 
 - Plaintext attestation data and the nonce used to hash the data leaf
 - Plaintext type data and the nonce used to hash the type leaf
@@ -289,7 +381,7 @@ The following diagrams show what nodes of the Merkle tree must be revealed to al
 
 **Revealing a single type including a reference to an on chain attestation**
 
- The user must reveal the following in this proof:
+The user must reveal the following in this proof:
 
 - Plaintext type data and the nonce used to hash the type leaf
 - The attester's signature of the claim node
